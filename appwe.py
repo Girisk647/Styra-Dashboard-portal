@@ -85,7 +85,7 @@ choice = st.sidebar.selectbox("Navigation", menu)
 
 # --- VIEW DASHBOARD ---
 if choice == "📊 View Dashboard":
-    st.title("Operational Reports")
+    st.title("Survey Reports")
     try:
         df = pd.read_csv('daily_master_report.csv')
         selected_date = st.sidebar.selectbox("Date", df['Date'].unique()[::-1])
