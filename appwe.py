@@ -47,26 +47,43 @@ check_login()
 # --- 3. GITHUB SYNC UTILITY ---
 def push_to_github():
     try:
-        url = f"https://api.github.com/repos/{REPO}/contents/{CSV_FILE}"
-        headers = {"Authorization": f"token {GITHUB_TOKEN}"}
+        # Use only the Username/Repo string here
+        api_repo = "Girisk647/Styra-Dashboard-portal"
+        url = f"https://api.github.com/repos/{api_repo}/contents/{CSV_FILE}"
+        headers = {
+            "Authorization": f"token {GITHUB_TOKEN}",
+            "Accept": "application/vnd.github.v3+json"
+        }
         
-        # Check if file exists to get SHA
+        # 1. Get the current file's SHA (required for updating)
         get_res = requests.get(url, headers=headers)
-        sha = get_res.json()['sha'] if get_res.status_code == 200 else None
+        sha = None
+        if get_res.status_code == 200:
+            sha = get_res.json().get('sha')
 
+        # 2. Read your local CSV
         with open(CSV_FILE, "rb") as f:
             content = base64.b64encode(f.read()).decode()
 
+        # 3. Create the payload
         payload = {
-            "message": f"Auto-Sync: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}",
+            "message": f"Manual Fetch: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}",
             "content": content,
             "branch": "main"
         }
         if sha:
             payload["sha"] = sha
         
+        # 4. Push to GitHub
         put_res = requests.put(url, json=payload, headers=headers)
-        return put_res.status_code in [200, 201]
+        
+        if put_res.status_code in [200, 201]:
+            return True
+        else:
+            # This will show you exactly why it failed in the sidebar
+            st.sidebar.error(f"GitHub Error: {put_res.json().get('message')}")
+            return False
+            
     except Exception as e:
         st.sidebar.error(f"Sync failed: {e}")
         return False
