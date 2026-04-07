@@ -11,7 +11,7 @@ import base64
 # I have updated the password to match what you tried in your screenshot.
 ADMIN_PASSWORD = "styra123" 
 GITHUB_TOKEN = "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" # Put your GitHub Token here
-REPO = "girisk647/styra-dashboard-portal"
+REPO = "https://github.com/Girisk647/Styra-Dashboard-portal"
 CSV_FILE = "daily_master_report.csv"
 
 PROJECTS = [
