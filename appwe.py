@@ -93,31 +93,36 @@ def fetch_data(project):
     try:
         engine = create_engine(f"postgresql+psycopg2://{project['user']}:{project['pass']}@{project['host']}:5432/{project['db']}")
         today_str = datetime.date.today().strftime('%d/%m/%Y')
+        current_date_sql = datetime.date.today().strftime('%Y-%m-%d')
         
-        # 1. Survey Data
-        if project['name'] == "PVVNL":
-            q_survey = f"SELECT 'CMI through MI' AS description, COUNT(*) AS total FROM tblresponselogs WHERE activityid=72 AND surveydate='{today_str}' AND uniqueid ILIKE 'misurvey%%' AND responsestatusid>=0 AND projectid<>999 UNION ALL SELECT 'CMI through CI' AS description, COUNT(*) AS total FROM tblresponselogs WHERE activityid=71 AND surveydate='{today_str}' AND uniqueid ILIKE 'cisurvey%%' AND responsestatusid>=0 AND projectid<>999 UNION ALL SELECT 'CI' AS description, COUNT(*) AS total FROM tblresponselogs WHERE activityid=71 AND surveydate='{today_str}' AND uniqueid NOT ILIKE 'cisurvey%%' AND responsestatusid>=0 AND projectid<>999 UNION ALL SELECT b.description, COUNT(responselogid) AS total FROM tblresponselogs a INNER JOIN tblactivitynew b ON a.activityid=b.activityid WHERE surveydate = '{today_str}' AND a.projectid = {project['project_id']} AND responsestatusid >= 0 AND a.serveyorid IS NOT NULL AND b.description NOT ILIKE '%%CMI%%' AND b.description NOT ILIKE '%%Consumer Indexing%%' AND b.description NOT ILIKE '%%Meter Installation%%' GROUP BY b.description"
-            
-            # 2. Your specific CTE Download Query for PVVNL
-            q_download = f"""
-                WITH cte AS (
-                    SELECT MAX(sqllitefileid), REPLACE(userid::text,'-',''), downloadedtimestamp FROM tblpreparedsqllitefiles a
-                    WHERE downloadedtimestamp::DATE=CURRENT_DATE AND downloaded=1 AND unique_id NOT ILIKE '%%merge%%'
-                    GROUP BY REPLACE(userid::text,'-',''), downloadedtimestamp
-                    UNION
-                    SELECT MAX(sqllitefileid), REPLACE(userid::text,'-',''), downloadedtimestamp FROM tblpreparedsqllitefiles 
-                    WHERE unique_id ILIKE '%%merge%%' AND preparedtimestamp::DATE=CURRENT_DATE AND userid<>0 
-                    AND preparedtimestamp::TIMESTAMP > (CURRENT_DATE::text || ' 07:59:43')::TIMESTAMP
-                    GROUP BY REPLACE(userid::text,'-',''), downloadedtimestamp
-                )
-                SELECT 'download' as status, COUNT(DISTINCT userid) as total FROM cte a
-                INNER JOIN tblusers b ON b.userid=a.replace::int
+        # --- 1. SURVEY QUERY (Updated split logic) ---
+        if project['name'] in ["PVVNL", "MVVVNL"]:
+            q_survey = f"""
+                SELECT 'CMI through MI' AS description, COUNT(*) AS total FROM tblresponselogs WHERE activityid=72 AND surveydate='{today_str}' AND uniqueid ILIKE 'misurvey%%' AND responsestatusid>=0 AND projectid<>999 
+                UNION ALL 
+                SELECT 'CMI through CI' AS description, COUNT(*) AS total FROM tblresponselogs WHERE activityid=71 AND surveydate='{today_str}' AND uniqueid ILIKE 'cisurvey%%' AND responsestatusid>=0 AND projectid<>999 
+                UNION ALL 
+                SELECT 'CI' AS description, COUNT(*) AS total FROM tblresponselogs WHERE activityid=71 AND surveydate='{today_str}' AND uniqueid NOT ILIKE 'cisurvey%%' AND responsestatusid>=0 AND projectid<>999 
+                UNION ALL 
+                SELECT b.description, COUNT(responselogid) AS total FROM tblresponselogs a INNER JOIN tblactivitynew b ON a.activityid=b.activityid WHERE surveydate = '{today_str}' AND a.projectid = {project['project_id']} AND responsestatusid >= 0 AND a.serveyorid IS NOT NULL AND b.description NOT ILIKE '%%CMI%%' AND b.description NOT ILIKE '%%Consumer Indexing%%' AND b.description NOT ILIKE '%%Meter Installation%%' GROUP BY b.description
             """
         else:
             q_survey = f"SELECT b.description, COUNT(responselogid) AS total FROM tblresponselogs a INNER JOIN tblactivitynew b ON a.activityid=b.activityid WHERE surveydate = '{today_str}' AND a.projectid = {project['project_id']} AND responsestatusid >= 0 AND a.serveyorid IS NOT NULL GROUP BY b.description"
+
+        # --- 2. DOWNLOAD QUERY (Your new PVVNL CTE logic) ---
+        if project['name'] == "PVVNL":
+            q_download = f"""
+                WITH cte AS (
+                    SELECT MAX(sqllitefileid), REPLACE(userid::text,'-','')::int AS uid, downloadedtimestamp FROM tblpreparedsqllitefiles WHERE downloadedtimestamp::DATE = CURRENT_DATE AND downloaded = 1 AND unique_id NOT ILIKE '%%merge%%' GROUP BY REPLACE(userid::text,'-',''), downloadedtimestamp
+                    UNION
+                    SELECT MAX(sqllitefileid), REPLACE(userid::text,'-','')::int AS uid, downloadedtimestamp FROM tblpreparedsqllitefiles WHERE unique_id ILIKE '%%merge%%' AND preparedtimestamp::DATE = CURRENT_DATE AND userid <> 0 AND preparedtimestamp::timestamp > '{current_date_sql} 07:59:43' GROUP BY REPLACE(userid::text,'-',''), downloadedtimestamp
+                )
+                SELECT COUNT(DISTINCT uid) AS total FROM cte a INNER JOIN tblusers b ON b.userid = a.uid
+            """
+        else:
             q_download = "SELECT COUNT(DISTINCT userid) AS total FROM tblpreparedsqllitefiles WHERE downloadedtimestamp::DATE = CURRENT_DATE AND downloaded = 1"
 
-        # 3. Manpower Query
+        # --- 3. MANPOWER QUERY ---
         q_manpower = f"SELECT COUNT(DISTINCT serveyorid) AS manpower FROM tblresponselogs WHERE surveydate='{today_str}' AND responsestatusid>=0"
 
         with engine.connect() as conn:
@@ -127,10 +132,11 @@ def fetch_data(project):
 
         # Process results
         run_time = datetime.datetime.now().strftime('%I:%M %p')
-        m_count = int(df_m['manpower'][0]) if not df_m.empty else 0
-        d_count = int(df_d['total'][0]) if not df_d.empty and df_d['total'][0] else 0
+        m_count = int(df_m.iloc[0,0]) if not df_m.empty else 0
+        total_val = df_d.iloc[0,0] if not df_d.empty and df_d.iloc[0,0] is not None else 0
+        d_count = int(total_val)
 
-        # Save to local CSV
+        # Save to local CSV (Reflecting your survey_report.py logic)
         file_exists = os.path.isfile(CSV_FILE)
         with open(CSV_FILE, mode='a', newline='') as f:
             writer = csv.writer(f)
