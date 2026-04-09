@@ -10,7 +10,7 @@ import base64
 # --- 1. SECURITY & CONFIGURATION ---
 # I have updated the password to match what you tried in your screenshot.
 ADMIN_PASSWORD = "styra123" 
-GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"] # Put your GitHub Token here
+GITHUB_TOKEN = st.secrets["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"] # Put your GitHub Token here
 REPO = "Girisk647/Styra-Dashboard-portal"
 CSV_FILE = "daily_master_report.csv"
 
