@@ -1,6 +1,6 @@
 import streamlit as st
 import pandas as pd
-from sqlalchemy import create_engine, text
+import psycopg2  # FIXED: Added missing import
 import datetime
 import os
 import csv
@@ -8,9 +8,9 @@ import requests
 import base64
 
 # --- 1. SECURITY & CONFIGURATION ---
-# I have updated the password to match what you tried in your screenshot.
 ADMIN_PASSWORD = "styra123" 
-GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"] # Put your GitHub Token here
+# Use Streamlit Secrets for the token to prevent GitHub from auto-deleting it
+GITHUB_TOKEN = st.secrets["GITHUB_TOKEN"] 
 REPO = "Girisk647/Styra-Dashboard-portal"
 CSV_FILE = "daily_master_report.csv"
 
@@ -44,28 +44,46 @@ def check_login():
 
 check_login()
 
-# --- 3. GITHUB SYNC UTILITY ---
-def push_to_github():
+# --- 3. CSV SAVING UTILITY ---
+# FIXED: Added this function which was missing from your appwe.py
+def save_to_history(project_name, survey_df, manpower, downloads):
+    file_exists = os.path.isfile(CSV_FILE)
+    today_date = datetime.date.today().strftime('%d/%m/%Y')
+    run_time = datetime.datetime.now().strftime('%I:%M %p')
+    
+    with open(CSV_FILE, mode='a', newline='') as f:
+        writer = csv.writer(f)
+        if not file_exists:
+            writer.writerow(['Date', 'Time', 'Project', 'Activity_Description', 'Count', 'Manpower', 'Total_Downloads'])
+        
+        for _, row in survey_df.iterrows():
+            writer.writerow([
+                today_date, 
+                run_time, 
+                project_name, 
+                row['description'], 
+                row['total'], 
+                manpower, 
+                downloads
+            ])
+
+# --- 4. GITHUB SYNC UTILITY ---
+def push_to_github(filename): # FIXED: Function now accepts the filename
     try:
-        # Use only the Username/Repo string here
-        api_repo = "Girisk647/Styra-Dashboard-portal"
-        url = f"https://api.github.com/repos/{api_repo}/contents/{CSV_FILE}"
+        url = f"https://api.github.com/repos/{REPO}/contents/{filename}"
         headers = {
             "Authorization": f"token {GITHUB_TOKEN}",
             "Accept": "application/vnd.github.v3+json"
         }
         
-        # 1. Get the current file's SHA (required for updating)
         get_res = requests.get(url, headers=headers)
         sha = None
         if get_res.status_code == 200:
             sha = get_res.json().get('sha')
 
-        # 2. Read your local CSV
-        with open(CSV_FILE, "rb") as f:
+        with open(filename, "rb") as f:
             content = base64.b64encode(f.read()).decode()
 
-        # 3. Create the payload
         payload = {
             "message": f"Manual Fetch: {datetime.datetime.now().strftime('%Y-%m-%d %H:%M')}",
             "content": content,
@@ -74,21 +92,14 @@ def push_to_github():
         if sha:
             payload["sha"] = sha
         
-        # 4. Push to GitHub
         put_res = requests.put(url, json=payload, headers=headers)
-        
-        if put_res.status_code in [200, 201]:
-            return True
-        else:
-            # This will show you exactly why it failed in the sidebar
-            st.sidebar.error(f"GitHub Error: {put_res.json().get('message')}")
-            return False
+        return put_res.status_code in [200, 201]
             
     except Exception as e:
         st.sidebar.error(f"Sync failed: {e}")
         return False
 
-# --- 4. CORE DATABASE ENGINE ---
+# --- 5. CORE DATABASE ENGINE ---
 def fetch_data(project):
     conn = None
     try:
@@ -104,7 +115,7 @@ def fetch_data(project):
         today_str = datetime.date.today().strftime('%d/%m/%Y')
         current_date_sql = datetime.date.today().strftime('%Y-%m-%d')
         
-        # --- 1. NEW SURVEY QUERY LOGIC ---
+        # --- SURVEY QUERY LOGIC ---
         if project['name'] in ["PVVNL", "MVVVNL"]:
             q_survey = f"""
             SELECT 'CMI through MI' AS description, COUNT(*) AS total FROM tblresponselogs
@@ -132,7 +143,7 @@ def fetch_data(project):
             GROUP BY b.description
             """
 
-        # --- 2. NEW DOWNLOAD QUERY LOGIC ---
+        # --- DOWNLOAD QUERY LOGIC ---
         if project['name'] in ["PVVNL", "MVVVNL"]:
             q_download = f"""
             WITH cte AS (
@@ -164,24 +175,19 @@ def fetch_data(project):
 
         q_manpower = f"SELECT COUNT(DISTINCT serveyorid) AS manpower FROM tblresponselogs WHERE surveydate='{today_str}' AND responsestatusid>=0"
 
-        # --- 3. EXECUTION & CLEANING ---
+        # --- EXECUTION & CLEANING ---
         df_s = pd.read_sql(q_survey, conn)
         df_m = pd.read_sql(q_manpower, conn)
         df_d = pd.read_sql(q_download, conn)
 
         if not df_s.empty:
-            # Clean spaces from descriptions so the table looks neat
             df_s['description'] = df_s['description'].str.strip()
-            
             m_count = int(df_m.iloc[0,0]) if not df_m.empty else 0
             total_val = df_d.iloc[0,0] if not df_d.empty and df_d.iloc[0,0] is not None else 0
             total_d = int(total_val)
 
-            # Save locally to daily_master_report.csv
             save_to_history(project['name'], df_s, m_count, total_d)
-            
-            # PUSH TO GITHUB (Keep your existing function call)
-            push_to_github('daily_master_report.csv')
+            push_to_github(CSV_FILE)
             return True
         return False
 
@@ -191,7 +197,7 @@ def fetch_data(project):
     finally:
         if conn: conn.close()
 
-# --- 5. USER INTERFACE ---
+# --- 6. USER INTERFACE ---
 st.sidebar.title("Navigation")
 page = st.sidebar.radio("Select View", ["📊 Dashboard", "⚙️ Local Collector"])
 
